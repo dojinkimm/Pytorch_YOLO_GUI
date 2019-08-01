@@ -14,8 +14,17 @@ def get_class_names(label_path):
 
 
 class DetectBoxes:
-    def __init__(self, label_path, conf_threshold=0.5, nms_threshold=0):
+    def __init__(self, label_path, class_list, conf_threshold=0.5, nms_threshold=0):
+        """Init
+             Args:
+               label_path: Path to COCO dataset labels (80)
+               class_list: an array that consists COCO dataset labels, some removed
+                            by user
+               conf_threshold: default is 0.5
+               nms_threshold: default is 0
+             """
         self.classes = get_class_names(label_path)
+        self.class_list = class_list
         self.confThreshold = conf_threshold
         self.nmsThreshold = nms_threshold
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -47,15 +56,18 @@ class DetectBoxes:
 
             for index, out in enumerate(detections):
                 outs = out.tolist()
-                left = int(outs[0])
-                top = int(outs[1])
-                right = int(outs[2])
-                bottom = int(outs[3])
-
                 cls = int(outs[-1])
-                color = STANDARD_COLORS[(cls + 1) % len(STANDARD_COLORS)]
 
-                self.draw_boxes(frame, self.classes[cls+1], outs[5], left, top, right, bottom, color)
+                if self.classes[cls+1] in self.class_list:
+                    left = int(outs[0])
+                    top = int(outs[1])
+                    right = int(outs[2])
+                    bottom = int(outs[3])
+
+                    cls = int(outs[-1])
+                    color = STANDARD_COLORS[(cls + 1) % len(STANDARD_COLORS)]
+
+                    self.draw_boxes(frame, self.classes[cls+1], outs[4], left, top, right, bottom, color)
 
     # # detect bounding boxes rcnn
     # def bounding_box_rcnn(self, frame, model):
