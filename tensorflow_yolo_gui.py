@@ -17,14 +17,14 @@ import PySimpleGUI as sg
 def arg_parse():
     i_vid = r'assets/cars.mp4'
     y_path = r'config/coco.names'
-    anchor_path = r'config/yolo_anchors.txt'
     ckpt_path = r'weight/yolov3.ckpt'
+    anchor_path = r'config/yolo_anchors.txt'
     layout = [
-        [sg.Text('Tensorflow-YOLO Video Player', size=(18, 1), font=('Any', 18), text_color='#1c86ee', justification='left')],
+        [sg.Text('Tensorflow-YOLO Video Player', size=(25, 1), font=('Any', 18), text_color='#1c86ee', justification='left')],
         [sg.Text('Path to input video'), sg.In(i_vid, size=(40, 1), key='video'), sg.FileBrowse()],
-        [sg.Text('Path to ckpt File'), sg.In(ckpt_path, size=(40, 1), key='ckpt'), sg.FileBrowse()],
-        [sg.Text('Path to anchor File'), sg.In(anchor_path, size=(40, 1), key='anchor_input'), sg.FileBrowse()],
-        [sg.Text('Path to label'), sg.In(y_path, size=(40, 1), key='label'), sg.FolderBrowse()],
+        [sg.Text('Path to ckpt File'), sg.In(ckpt_path, size=(40, 1), key='ckpt_path'), sg.FileBrowse()],
+        [sg.Text('Path to anchor File'), sg.In(anchor_path, size=(40, 1), key='anchor_path'), sg.FileBrowse()],
+        [sg.Text('Path to label'), sg.In(y_path, size=(40, 1), key='label_path'), sg.FolderBrowse()],
         [sg.Text('Confidence'),
          sg.Slider(range=(0, 1), orientation='h', resolution=.1, default_value=.5, size=(15, 15), key='confidence')],
         [sg.Text('NMSThreshold'),
@@ -32,7 +32,7 @@ def arg_parse():
         [sg.Text('Resolution'), sg.Radio('320', "resolution", key="small_resol"),
          sg.Radio('416', "resolution", default=True, key="best_resol"),
          sg.Radio('512', "resolution", key="large_resol")],
-        [sg.Text("Classes not to detect"), sg.Listbox(values=class_names, default_values=class_names,
+        [sg.Text("Classes to detect"), sg.Listbox(values=class_names, default_values=class_names,
                                                       select_mode=sg.LISTBOX_SELECT_MODE_MULTIPLE, size=(30, 10),
                                                       key='class_list')],
         [sg.Text(' ' * 8), sg.Checkbox('Use webcam', key='webcam')],
@@ -81,8 +81,8 @@ def main():
     args = arg_parse()
 
     # anchors and class labels
-    anchors = parse_anchors(args['anchor_input'])
-    classes = read_class_names(args['label'])
+    anchors = parse_anchors(args['anchor_path'])
+    classes = read_class_names(args['label_path'])
     num_classes = len(classes)
 
     VIDEO_PATH = args['video'] if not args['webcam'] else 0
@@ -105,7 +105,7 @@ def main():
                                         nms_thresh=args['nms_threshold'])
 
         saver = tf.train.Saver()
-        saver.restore(sess, args['ckpt'])
+        saver.restore(sess, args['ckpt_path'])
 
         # Set window
         winName = 'YOLO-Tensorflow'
