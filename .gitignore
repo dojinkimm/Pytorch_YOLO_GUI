@@ -1,0 +1,15 @@
+# Python environment
+.idea/*
+__pycache__/*
+utils/__pycache__/*
+
+
+# media
+assets/*
+!assets/cars.mp4
+!assets/cars2.mp4
+!assets/peopledesk.mp4
+
+# weight_file
+weight/*
+!weight/download_weights.sh
