@@ -1,352 +1,363 @@
-from __future__ import division
+# coding=utf-8
+# for better understanding about yolov3 architecture, refer to this website (in Chinese):
+# https://blog.csdn.net/leviopku/article/details/82660381
 
-import torch
-import torch.nn as nn
-import torch.nn.functional as F
-import numpy as np
-
-from utils.parse_config import *
-from utils.utils import build_targets, to_cpu
-
-
-def create_modules(module_defs):
-    """
-    Constructs module list of layer blocks from module configuration in module_defs
-    """
-    net_info = module_defs.pop(0)
-    output_filters = [int(net_info["channels"])]
-    module_list = nn.ModuleList()
-    for module_i, module_def in enumerate(module_defs):
-        modules = nn.Sequential()
-
-        if module_def["type"] == "convolutional":
-            bn = int(module_def["batch_normalize"])
-            filters = int(module_def["filters"])
-            kernel_size = int(module_def["size"])
-            pad = int(module_def['pad'])
-            if pad:
-                pad = (kernel_size - 1) // 2
-            else:
-                pad = 0
-            # Add conv layer
-            modules.add_module(
-                f"conv_{module_i}",
-                nn.Conv2d(
-                    in_channels=output_filters[-1],
-                    out_channels=filters,
-                    kernel_size=kernel_size,
-                    stride=int(module_def["stride"]),
-                    padding=pad,
-                    bias=not bn,
-                ),
-            )
-            # Add batch norm layer
-            if bn:
-                # modules.add_module(f"batch_norm_{module_i}", nn.BatchNorm2d(filters))
-                modules.add_module(f"batch_norm_{module_i}", nn.BatchNorm2d(filters, momentum=0.9, eps=1e-5))
-            # Check activation
-            # It is either Linear or Leaky ReLU for YOLO
-            if module_def["activation"] == "leaky":
-                # modules.add_module(f"leaky_{module_i}", nn.LeakyReLU(0.1))
-                modules.add_module(f"leaky_{module_i}", nn.LeakyReLU(0.1, inplace=True))
-
-        elif module_def["type"] == "maxpool":
-            kernel_size = int(module_def["size"])
-            stride = int(module_def["stride"])
-            if kernel_size == 2 and stride == 1:
-                modules.add_module(f"_debug_padding_{module_i}", nn.ZeroPad2d((0, 1, 0, 1)))
-            maxpool = nn.MaxPool2d(kernel_size=kernel_size, stride=stride, padding=int((kernel_size - 1) // 2))
-            modules.add_module(f"maxpool_{module_i}", maxpool)
-
-        elif module_def["type"] == "upsample":
-            upsample = Upsample(scale_factor=int(module_def["stride"]), mode="nearest")
-            modules.add_module(f"upsample_{module_i}", upsample)
-
-        elif module_def["type"] == "route":
-            layers = [int(x) for x in module_def["layers"].split(",")]
-            filters = sum([output_filters[1:][i] for i in layers])
-            modules.add_module(f"route_{module_i}", EmptyLayer())
-
-        elif module_def["type"] == "shortcut":
-            filters = output_filters[1:][int(module_def["from"])]
-            modules.add_module(f"shortcut_{module_i}", EmptyLayer())
-
-        elif module_def["type"] == "yolo":
-            anchor_idxs = [int(x) for x in module_def["mask"].split(",")]
-            # Extract anchors
-            anchors = [int(x) for x in module_def["anchors"].split(",")]
-            anchors = [(anchors[i], anchors[i + 1]) for i in range(0, len(anchors), 2)]
-            anchors = [anchors[i] for i in anchor_idxs]
-            num_classes = int(module_def["classes"])
-            img_size = int(net_info["height"])
-            # Define detection layer
-            yolo_layer = YOLOLayer(anchors, num_classes, img_size)
-
-            modules.add_module(f"yolo_{module_i}", yolo_layer)
-        # Register module list and number of output filters
-        module_list.append(modules)
-        output_filters.append(filters)
-
-    return net_info, module_list
+from __future__ import division, print_function
+from utils.layer_utils import conv2d, darknet53_body, yolo_block, upsample_layer
+import tensorflow as tf
+slim = tf.contrib.slim
 
 
-class Upsample(nn.Module):
-    """ nn.Upsample is deprecated """
+class Darknet(object):
 
-    def __init__(self, scale_factor, mode="nearest"):
-        super(Upsample, self).__init__()
-        self.scale_factor = scale_factor
-        self.mode = mode
+    def __init__(self, class_num, anchors, use_label_smooth=False, use_focal_loss=False, batch_norm_decay=0.999, weight_decay=5e-4, use_static_shape=True):
 
-    def forward(self, x):
-        x = F.interpolate(x, scale_factor=self.scale_factor, mode=self.mode)
-        return x
-
-
-class EmptyLayer(nn.Module):
-    """Placeholder for 'route' and 'shortcut' layers"""
-
-    def __init__(self):
-        super(EmptyLayer, self).__init__()
-
-
-class YOLOLayer(nn.Module):
-    """Detection layer"""
-
-    def __init__(self, anchors, num_classes, img_dim=416):
-        super(YOLOLayer, self).__init__()
+        # self.anchors = [[10, 13], [16, 30], [33, 23],
+                         # [30, 61], [62, 45], [59,  119],
+                         # [116, 90], [156, 198], [373,326]]
+        self.class_num = class_num
         self.anchors = anchors
-        self.num_anchors = len(anchors)
-        self.num_classes = num_classes
-        self.ignore_thres = 0.5
-        self.mse_loss = nn.MSELoss()
-        self.bce_loss = nn.BCELoss()
-        self.obj_scale = 1
-        self.noobj_scale = 100
-        self.metrics = {}
-        self.img_dim = img_dim
-        self.grid_size = 0  # grid size
+        self.batch_norm_decay = batch_norm_decay
+        self.use_label_smooth = use_label_smooth
+        self.use_focal_loss = use_focal_loss
+        self.weight_decay = weight_decay
+        # inference speed optimization
+        # if `use_static_shape` is True, use tensor.get_shape(), otherwise use tf.shape(tensor)
+        # static_shape is slightly faster
+        self.use_static_shape = use_static_shape
 
-    def compute_grid_offsets(self, grid_size, cuda=True):
-        self.grid_size = grid_size
-        g = self.grid_size
-        FloatTensor = torch.cuda.FloatTensor if cuda else torch.FloatTensor
-        self.stride = self.img_dim / self.grid_size
-        # Calculate offsets for each grid
-        self.grid_x = torch.arange(g).repeat(g, 1).view([1, 1, g, g]).type(FloatTensor)
-        self.grid_y = torch.arange(g).repeat(g, 1).t().view([1, 1, g, g]).type(FloatTensor)
-        self.scaled_anchors = FloatTensor([(a_w / self.stride, a_h / self.stride) for a_w, a_h in self.anchors])
-        self.anchor_w = self.scaled_anchors[:, 0:1].view((1, self.num_anchors, 1, 1))
-        self.anchor_h = self.scaled_anchors[:, 1:2].view((1, self.num_anchors, 1, 1))
+    def forward(self, inputs, is_training=False, reuse=False):
+        # the input img_size, form: [height, weight]
+        # it will be used later
+        self.img_size = tf.shape(inputs)[1:3]
+        # set batch norm params
+        batch_norm_params = {
+            'decay': self.batch_norm_decay,
+            'epsilon': 1e-05,
+            'scale': True,
+            'is_training': is_training,
+            'fused': None,  # Use fused batch norm if possible.
+        }
 
+        with slim.arg_scope([slim.conv2d, slim.batch_norm], reuse=reuse):
+            with slim.arg_scope([slim.conv2d], 
+                                normalizer_fn=slim.batch_norm,
+                                normalizer_params=batch_norm_params,
+                                biases_initializer=None,
+                                activation_fn=lambda x: tf.nn.leaky_relu(x, alpha=0.1),
+                                weights_regularizer=slim.l2_regularizer(self.weight_decay)):
+                with tf.variable_scope('darknet53_body'):
+                    route_1, route_2, route_3 = darknet53_body(inputs)
 
-    def forward(self, x, targets=None, img_dim=None):
-        # Tensors for cuda support
-        FloatTensor = torch.cuda.FloatTensor if x.is_cuda else torch.FloatTensor
-        LongTensor = torch.cuda.LongTensor if x.is_cuda else torch.LongTensor
-        ByteTensor = torch.cuda.ByteTensor if x.is_cuda else torch.ByteTensor
+                with tf.variable_scope('yolov3_head'):
+                    inter1, net = yolo_block(route_3, 512)
+                    feature_map_1 = slim.conv2d(net, 3 * (5 + self.class_num), 1,
+                                                stride=1, normalizer_fn=None,
+                                                activation_fn=None, biases_initializer=tf.zeros_initializer())
+                    feature_map_1 = tf.identity(feature_map_1, name='feature_map_1')
 
-        self.img_dim = img_dim
-        num_samples = x.size(0)
-        grid_size = x.size(2)
+                    inter1 = conv2d(inter1, 256, 1)
+                    inter1 = upsample_layer(inter1, route_2.get_shape().as_list() if self.use_static_shape else tf.shape(route_2))
+                    concat1 = tf.concat([inter1, route_2], axis=3)
 
-        prediction = (
-            x.view(num_samples, self.num_anchors, self.num_classes + 5, grid_size, grid_size)
-            .permute(0, 1, 3, 4, 2)
-            .contiguous()
-        )
+                    inter2, net = yolo_block(concat1, 256)
+                    feature_map_2 = slim.conv2d(net, 3 * (5 + self.class_num), 1,
+                                                stride=1, normalizer_fn=None,
+                                                activation_fn=None, biases_initializer=tf.zeros_initializer())
+                    feature_map_2 = tf.identity(feature_map_2, name='feature_map_2')
 
-        # Get outputs
-        x = torch.sigmoid(prediction[..., 0])  # Center x
-        y = torch.sigmoid(prediction[..., 1])  # Center y
-        w = prediction[..., 2]  # Width
-        h = prediction[..., 3]  # Height
-        pred_conf = torch.sigmoid(prediction[..., 4])  # Conf
-        pred_cls = torch.sigmoid(prediction[..., 5:])  # Cls pred.
+                    inter2 = conv2d(inter2, 128, 1)
+                    inter2 = upsample_layer(inter2, route_1.get_shape().as_list() if self.use_static_shape else tf.shape(route_1))
+                    concat2 = tf.concat([inter2, route_1], axis=3)
 
-        # If grid size does not match current we compute new offsets
-        if grid_size != self.grid_size:
-            self.compute_grid_offsets(grid_size, cuda=x.is_cuda)
+                    _, feature_map_3 = yolo_block(concat2, 128)
+                    feature_map_3 = slim.conv2d(feature_map_3, 3 * (5 + self.class_num), 1,
+                                                stride=1, normalizer_fn=None,
+                                                activation_fn=None, biases_initializer=tf.zeros_initializer())
+                    feature_map_3 = tf.identity(feature_map_3, name='feature_map_3')
 
-        # Add offset and scale with anchors
-        pred_boxes = FloatTensor(prediction[..., :4].shape)
-        pred_boxes[..., 0] = x.data + self.grid_x
-        pred_boxes[..., 1] = y.data + self.grid_y
-        pred_boxes[..., 2] = torch.exp(w.data) * self.anchor_w
-        pred_boxes[..., 3] = torch.exp(h.data) * self.anchor_h
+            return feature_map_1, feature_map_2, feature_map_3
 
-        output = torch.cat(
-            (
-                pred_boxes.view(num_samples, -1, 4) * self.stride,
-                pred_conf.view(num_samples, -1, 1),
-                pred_cls.view(num_samples, -1, self.num_classes),
-            ),
-            -1,
-        )
+    def reorg_layer(self, feature_map, anchors):
+        '''
+        feature_map: a feature_map from [feature_map_1, feature_map_2, feature_map_3] returned
+            from `forward` function
+        anchors: shape: [3, 2]
+        '''
+        # NOTE: size in [h, w] format! don't get messed up!
+        grid_size = feature_map.get_shape().as_list()[1:3] if self.use_static_shape else tf.shape(feature_map)[1:3]  # [13, 13]
+        # the downscale ratio in height and weight
+        ratio = tf.cast(self.img_size / grid_size, tf.float32)
+        # rescale the anchors to the feature_map
+        # NOTE: the anchor is in [w, h] format!
+        rescaled_anchors = [(anchor[0] / ratio[1], anchor[1] / ratio[0]) for anchor in anchors]
 
-        if targets is None:
-            return output, 0
+        feature_map = tf.reshape(feature_map, [-1, grid_size[0], grid_size[1], 3, 5 + self.class_num])
+
+        # split the feature_map along the last dimension
+        # shape info: take 416x416 input image and the 13*13 feature_map for example:
+        # box_centers: [N, 13, 13, 3, 2] last_dimension: [center_x, center_y]
+        # box_sizes: [N, 13, 13, 3, 2] last_dimension: [width, height]
+        # conf_logits: [N, 13, 13, 3, 1]
+        # prob_logits: [N, 13, 13, 3, class_num]
+        box_centers, box_sizes, conf_logits, prob_logits = tf.split(feature_map, [2, 2, 1, self.class_num], axis=-1)
+        box_centers = tf.nn.sigmoid(box_centers)
+
+        # use some broadcast tricks to get the mesh coordinates
+        grid_x = tf.range(grid_size[1], dtype=tf.int32)
+        grid_y = tf.range(grid_size[0], dtype=tf.int32)
+        grid_x, grid_y = tf.meshgrid(grid_x, grid_y)
+        x_offset = tf.reshape(grid_x, (-1, 1))
+        y_offset = tf.reshape(grid_y, (-1, 1))
+        x_y_offset = tf.concat([x_offset, y_offset], axis=-1)
+        # shape: [13, 13, 1, 2]
+        x_y_offset = tf.cast(tf.reshape(x_y_offset, [grid_size[0], grid_size[1], 1, 2]), tf.float32)
+
+        # get the absolute box coordinates on the feature_map 
+        box_centers = box_centers + x_y_offset
+        # rescale to the original image scale
+        box_centers = box_centers * ratio[::-1]
+
+        # avoid getting possible nan value with tf.clip_by_value
+        box_sizes = tf.exp(box_sizes) * rescaled_anchors
+        # box_sizes = tf.clip_by_value(tf.exp(box_sizes), 1e-9, 100) * rescaled_anchors
+        # rescale to the original image scale
+        box_sizes = box_sizes * ratio[::-1]
+
+        # shape: [N, 13, 13, 3, 4]
+        # last dimension: (center_x, center_y, w, h)
+        boxes = tf.concat([box_centers, box_sizes], axis=-1)
+
+        # shape:
+        # x_y_offset: [13, 13, 1, 2]
+        # boxes: [N, 13, 13, 3, 4], rescaled to the original image scale
+        # conf_logits: [N, 13, 13, 3, 1]
+        # prob_logits: [N, 13, 13, 3, class_num]
+        return x_y_offset, boxes, conf_logits, prob_logits
+
+    def predict(self, feature_maps):
+        '''
+        Receive the returned feature_maps from `forward` function,
+        the produce the output predictions at the test stage.
+        '''
+        feature_map_1, feature_map_2, feature_map_3 = feature_maps
+
+        feature_map_anchors = [(feature_map_1, self.anchors[6:9]),
+                               (feature_map_2, self.anchors[3:6]),
+                               (feature_map_3, self.anchors[0:3])]
+        reorg_results = [self.reorg_layer(feature_map, anchors) for (feature_map, anchors) in feature_map_anchors]
+
+        def _reshape(result):
+            x_y_offset, boxes, conf_logits, prob_logits = result
+            grid_size = x_y_offset.get_shape().as_list()[:2] if self.use_static_shape else tf.shape(x_y_offset)[:2]
+            boxes = tf.reshape(boxes, [-1, grid_size[0] * grid_size[1] * 3, 4])
+            conf_logits = tf.reshape(conf_logits, [-1, grid_size[0] * grid_size[1] * 3, 1])
+            prob_logits = tf.reshape(prob_logits, [-1, grid_size[0] * grid_size[1] * 3, self.class_num])
+            # shape: (take 416*416 input image and feature_map_1 for example)
+            # boxes: [N, 13*13*3, 4]
+            # conf_logits: [N, 13*13*3, 1]
+            # prob_logits: [N, 13*13*3, class_num]
+            return boxes, conf_logits, prob_logits
+
+        boxes_list, confs_list, probs_list = [], [], []
+        for result in reorg_results:
+            boxes, conf_logits, prob_logits = _reshape(result)
+            confs = tf.sigmoid(conf_logits)
+            probs = tf.sigmoid(prob_logits)
+            boxes_list.append(boxes)
+            confs_list.append(confs)
+            probs_list.append(probs)
+        
+        # collect results on three scales
+        # take 416*416 input image for example:
+        # shape: [N, (13*13+26*26+52*52)*3, 4]
+        boxes = tf.concat(boxes_list, axis=1)
+        # shape: [N, (13*13+26*26+52*52)*3, 1]
+        confs = tf.concat(confs_list, axis=1)
+        # shape: [N, (13*13+26*26+52*52)*3, class_num]
+        probs = tf.concat(probs_list, axis=1)
+
+        center_x, center_y, width, height = tf.split(boxes, [1, 1, 1, 1], axis=-1)
+        x_min = center_x - width / 2
+        y_min = center_y - height / 2
+        x_max = center_x + width / 2
+        y_max = center_y + height / 2
+
+        boxes = tf.concat([x_min, y_min, x_max, y_max], axis=-1)
+
+        return boxes, confs, probs
+    
+    def loss_layer(self, feature_map_i, y_true, anchors):
+        '''
+        calc loss function from a certain scale
+        input:
+            feature_map_i: feature maps of a certain scale. shape: [N, 13, 13, 3*(5 + num_class)] etc.
+            y_true: y_ture from a certain scale. shape: [N, 13, 13, 3, 5 + num_class + 1] etc.
+            anchors: shape [9, 2]
+        '''
+        
+        # size in [h, w] format! don't get messed up!
+        grid_size = tf.shape(feature_map_i)[1:3]
+        # the downscale ratio in height and weight
+        ratio = tf.cast(self.img_size / grid_size, tf.float32)
+        # N: batch_size
+        N = tf.cast(tf.shape(feature_map_i)[0], tf.float32)
+
+        x_y_offset, pred_boxes, pred_conf_logits, pred_prob_logits = self.reorg_layer(feature_map_i, anchors)
+
+        ###########
+        # get mask
+        ###########
+
+        # shape: take 416x416 input image and 13*13 feature_map for example:
+        # [N, 13, 13, 3, 1]
+        object_mask = y_true[..., 4:5]
+
+        # the calculation of ignore mask if referred from
+        # https://github.com/pjreddie/darknet/blob/master/src/yolo_layer.c#L179
+        ignore_mask = tf.TensorArray(tf.float32, size=0, dynamic_size=True)
+        def loop_cond(idx, ignore_mask):
+            return tf.less(idx, tf.cast(N, tf.int32))
+        def loop_body(idx, ignore_mask):
+            # shape: [13, 13, 3, 4] & [13, 13, 3]  ==>  [V, 4]
+            # V: num of true gt box of each image in a batch
+            valid_true_boxes = tf.boolean_mask(y_true[idx, ..., 0:4], tf.cast(object_mask[idx, ..., 0], 'bool'))
+            # shape: [13, 13, 3, 4] & [V, 4] ==> [13, 13, 3, V]
+            iou = self.box_iou(pred_boxes[idx], valid_true_boxes)
+            # shape: [13, 13, 3]
+            best_iou = tf.reduce_max(iou, axis=-1)
+            # shape: [13, 13, 3]
+            ignore_mask_tmp = tf.cast(best_iou < 0.5, tf.float32)
+            # finally will be shape: [N, 13, 13, 3]
+            ignore_mask = ignore_mask.write(idx, ignore_mask_tmp)
+            return idx + 1, ignore_mask
+        _, ignore_mask = tf.while_loop(cond=loop_cond, body=loop_body, loop_vars=[0, ignore_mask])
+        ignore_mask = ignore_mask.stack()
+        # shape: [N, 13, 13, 3, 1]
+        ignore_mask = tf.expand_dims(ignore_mask, -1)
+
+        # shape: [N, 13, 13, 3, 2]
+        pred_box_xy = pred_boxes[..., 0:2]
+        pred_box_wh = pred_boxes[..., 2:4]
+
+        # get xy coordinates in one cell from the feature_map
+        # numerical range: 0 ~ 1
+        # shape: [N, 13, 13, 3, 2]
+        true_xy = y_true[..., 0:2] / ratio[::-1] - x_y_offset
+        pred_xy = pred_box_xy / ratio[::-1] - x_y_offset
+
+        # get_tw_th
+        # numerical range: 0 ~ 1
+        # shape: [N, 13, 13, 3, 2]
+        true_tw_th = y_true[..., 2:4] / anchors
+        pred_tw_th = pred_box_wh / anchors
+        # for numerical stability
+        true_tw_th = tf.where(condition=tf.equal(true_tw_th, 0),
+                              x=tf.ones_like(true_tw_th), y=true_tw_th)
+        pred_tw_th = tf.where(condition=tf.equal(pred_tw_th, 0),
+                              x=tf.ones_like(pred_tw_th), y=pred_tw_th)
+        true_tw_th = tf.log(tf.clip_by_value(true_tw_th, 1e-9, 1e9))
+        pred_tw_th = tf.log(tf.clip_by_value(pred_tw_th, 1e-9, 1e9))
+
+        # box size punishment: 
+        # box with smaller area has bigger weight. This is taken from the yolo darknet C source code.
+        # shape: [N, 13, 13, 3, 1]
+        box_loss_scale = 2. - (y_true[..., 2:3] / tf.cast(self.img_size[1], tf.float32)) * (y_true[..., 3:4] / tf.cast(self.img_size[0], tf.float32))
+
+        ############
+        # loss_part
+        ############
+        # mix_up weight
+        # [N, 13, 13, 3, 1]
+        mix_w = y_true[..., -1:]
+        # shape: [N, 13, 13, 3, 1]
+        xy_loss = tf.reduce_sum(tf.square(true_xy - pred_xy) * object_mask * box_loss_scale * mix_w) / N
+        wh_loss = tf.reduce_sum(tf.square(true_tw_th - pred_tw_th) * object_mask * box_loss_scale * mix_w) / N
+
+        # shape: [N, 13, 13, 3, 1]
+        conf_pos_mask = object_mask
+        conf_neg_mask = (1 - object_mask) * ignore_mask
+        conf_loss_pos = conf_pos_mask * tf.nn.sigmoid_cross_entropy_with_logits(labels=object_mask, logits=pred_conf_logits)
+        conf_loss_neg = conf_neg_mask * tf.nn.sigmoid_cross_entropy_with_logits(labels=object_mask, logits=pred_conf_logits)
+        # TODO: may need to balance the pos-neg by multiplying some weights
+        conf_loss = conf_loss_pos + conf_loss_neg
+        if self.use_focal_loss:
+            alpha = 1.0
+            gamma = 2.0
+            # TODO: alpha should be a mask array if needed
+            focal_mask = alpha * tf.pow(tf.abs(object_mask - tf.sigmoid(pred_conf_logits)), gamma)
+            conf_loss *= focal_mask
+        conf_loss = tf.reduce_sum(conf_loss * mix_w) / N
+
+        # shape: [N, 13, 13, 3, 1]
+        # whether to use label smooth
+        if self.use_label_smooth:
+            delta = 0.01
+            label_target = (1 - delta) * y_true[..., 5:-1] + delta * 1. / self.class_num
         else:
-            iou_scores, class_mask, obj_mask, noobj_mask, tx, ty, tw, th, tcls, tconf = build_targets(
-                pred_boxes=pred_boxes,
-                pred_cls=pred_cls,
-                target=targets,
-                anchors=self.scaled_anchors,
-                ignore_thres=self.ignore_thres,
-            )
+            label_target = y_true[..., 5:-1]
+        class_loss = object_mask * tf.nn.sigmoid_cross_entropy_with_logits(labels=label_target, logits=pred_prob_logits) * mix_w
+        class_loss = tf.reduce_sum(class_loss) / N
 
-            # Loss : Mask outputs to ignore non-existing objects (except with conf. loss)
-            loss_x = self.mse_loss(x[obj_mask], tx[obj_mask])
-            loss_y = self.mse_loss(y[obj_mask], ty[obj_mask])
-            loss_w = self.mse_loss(w[obj_mask], tw[obj_mask])
-            loss_h = self.mse_loss(h[obj_mask], th[obj_mask])
-            loss_conf_obj = self.bce_loss(pred_conf[obj_mask], tconf[obj_mask])
-            loss_conf_noobj = self.bce_loss(pred_conf[noobj_mask], tconf[noobj_mask])
-            loss_conf = self.obj_scale * loss_conf_obj + self.noobj_scale * loss_conf_noobj
-            loss_cls = self.bce_loss(pred_cls[obj_mask], tcls[obj_mask])
-            total_loss = loss_x + loss_y + loss_w + loss_h + loss_conf + loss_cls
+        return xy_loss, wh_loss, conf_loss, class_loss
+    
 
-            # Metrics
-            cls_acc = 100 * class_mask[obj_mask].mean()
-            conf_obj = pred_conf[obj_mask].mean()
-            conf_noobj = pred_conf[noobj_mask].mean()
-            conf50 = (pred_conf > 0.5).float()
-            iou50 = (iou_scores > 0.5).float()
-            iou75 = (iou_scores > 0.75).float()
-            detected_mask = conf50 * class_mask * tconf
-            precision = torch.sum(iou50 * detected_mask) / (conf50.sum() + 1e-16)
-            recall50 = torch.sum(iou50 * detected_mask) / (obj_mask.sum() + 1e-16)
-            recall75 = torch.sum(iou75 * detected_mask) / (obj_mask.sum() + 1e-16)
+    def box_iou(self, pred_boxes, valid_true_boxes):
+        '''
+        param:
+            pred_boxes: [13, 13, 3, 4], (center_x, center_y, w, h)
+            valid_true: [V, 4]
+        '''
 
-            self.metrics = {
-                "loss": to_cpu(total_loss).item(),
-                "x": to_cpu(loss_x).item(),
-                "y": to_cpu(loss_y).item(),
-                "w": to_cpu(loss_w).item(),
-                "h": to_cpu(loss_h).item(),
-                "conf": to_cpu(loss_conf).item(),
-                "cls": to_cpu(loss_cls).item(),
-                "cls_acc": to_cpu(cls_acc).item(),
-                "recall50": to_cpu(recall50).item(),
-                "recall75": to_cpu(recall75).item(),
-                "precision": to_cpu(precision).item(),
-                "conf_obj": to_cpu(conf_obj).item(),
-                "conf_noobj": to_cpu(conf_noobj).item(),
-                "grid_size": grid_size,
-            }
+        # [13, 13, 3, 2]
+        pred_box_xy = pred_boxes[..., 0:2]
+        pred_box_wh = pred_boxes[..., 2:4]
 
-            return output, total_loss
+        # shape: [13, 13, 3, 1, 2]
+        pred_box_xy = tf.expand_dims(pred_box_xy, -2)
+        pred_box_wh = tf.expand_dims(pred_box_wh, -2)
 
+        # [V, 2]
+        true_box_xy = valid_true_boxes[:, 0:2]
+        true_box_wh = valid_true_boxes[:, 2:4]
 
-class Darknet(nn.Module):
-    """YOLOv3 object detection model"""
+        # [13, 13, 3, 1, 2] & [V, 2] ==> [13, 13, 3, V, 2]
+        intersect_mins = tf.maximum(pred_box_xy - pred_box_wh / 2.,
+                                    true_box_xy - true_box_wh / 2.)
+        intersect_maxs = tf.minimum(pred_box_xy + pred_box_wh / 2.,
+                                    true_box_xy + true_box_wh / 2.)
+        intersect_wh = tf.maximum(intersect_maxs - intersect_mins, 0.)
 
-    def __init__(self, config_path, img_size=416):
-        super(Darknet, self).__init__()
-        self.module_defs = parse_model_config(config_path)
-        self.net_info, self.module_list = create_modules(self.module_defs)
-        self.yolo_layers = [layer[0] for layer in self.module_list if hasattr(layer[0], "metrics")]
-        self.img_size = img_size
-        self.seen = 0
-        self.header_info = np.array([0, 0, 0, self.seen, 0], dtype=np.int32)
+        # shape: [13, 13, 3, V]
+        intersect_area = intersect_wh[..., 0] * intersect_wh[..., 1]
+        # shape: [13, 13, 3, 1]
+        pred_box_area = pred_box_wh[..., 0] * pred_box_wh[..., 1]
+        # shape: [V]
+        true_box_area = true_box_wh[..., 0] * true_box_wh[..., 1]
+        # shape: [1, V]
+        true_box_area = tf.expand_dims(true_box_area, axis=0)
 
-    def forward(self, x, targets=None):
-        img_dim = x.shape[2]
-        loss = 0
-        layer_outputs, yolo_outputs = [], []
-        for i, (module_def, module) in enumerate(zip(self.module_defs, self.module_list)):
-            if module_def["type"] in ["convolutional", "upsample", "maxpool"]:
-                x = module(x)
-            elif module_def["type"] == "route":
-                x = torch.cat([layer_outputs[int(layer_i)] for layer_i in module_def["layers"].split(",")], 1)
-            elif module_def["type"] == "shortcut":
-                layer_i = int(module_def["from"])
-                x = layer_outputs[-1] + layer_outputs[layer_i]
-            elif module_def["type"] == "yolo":
-                x, layer_loss = module[0](x, targets, img_dim)
-                loss += layer_loss
-                yolo_outputs.append(x)
-            layer_outputs.append(x)
-        yolo_outputs = to_cpu(torch.cat(yolo_outputs, 1))
-        return yolo_outputs if targets is None else (loss, yolo_outputs)
+        # [13, 13, 3, V]
+        iou = intersect_area / (pred_box_area + true_box_area - intersect_area + 1e-10)
 
-    def load_darknet_weights(self, weights_path):
-        """Parses and loads the weights stored in 'weights_path'"""
+        return iou
 
-        # Open the weights file
-        with open(weights_path, "rb") as f:
-            header = np.fromfile(f, dtype=np.int32, count=5)  # First five are header values
-            self.header_info = header  # Needed to write header when saving weights
-            self.seen = header[3]  # number of images seen during training
-            weights = np.fromfile(f, dtype=np.float32)  # The rest are weights
+    
+    def compute_loss(self, y_pred, y_true):
+        '''
+        param:
+            y_pred: returned feature_map list by `forward` function: [feature_map_1, feature_map_2, feature_map_3]
+            y_true: input y_true by the tf.data pipeline
+        '''
+        loss_xy, loss_wh, loss_conf, loss_class = 0., 0., 0., 0.
+        anchor_group = [self.anchors[6:9], self.anchors[3:6], self.anchors[0:3]]
 
-        # Establish cutoff for loading backbone weights
-        cutoff = None
-        if "darknet53.conv.74" in weights_path:
-            cutoff = 75
-
-        ptr = 0
-        for i, (module_def, module) in enumerate(zip(self.module_defs, self.module_list)):
-            if i == cutoff:
-                break
-            if module_def["type"] == "convolutional":
-                conv_layer = module[0]
-                if module_def["batch_normalize"]:
-                    # Load BN bias, weights, running mean and running variance
-                    bn_layer = module[1]
-                    num_b = bn_layer.bias.numel()  # Number of biases
-                    # Bias
-                    bn_b = torch.from_numpy(weights[ptr : ptr + num_b]).view_as(bn_layer.bias)
-                    bn_layer.bias.data.copy_(bn_b)
-                    ptr += num_b
-                    # Weight
-                    bn_w = torch.from_numpy(weights[ptr : ptr + num_b]).view_as(bn_layer.weight)
-                    bn_layer.weight.data.copy_(bn_w)
-                    ptr += num_b
-                    # Running Mean
-                    bn_rm = torch.from_numpy(weights[ptr : ptr + num_b]).view_as(bn_layer.running_mean)
-                    bn_layer.running_mean.data.copy_(bn_rm)
-                    ptr += num_b
-                    # Running Var
-                    bn_rv = torch.from_numpy(weights[ptr : ptr + num_b]).view_as(bn_layer.running_var)
-                    bn_layer.running_var.data.copy_(bn_rv)
-                    ptr += num_b
-                else:
-                    # Load conv. bias
-                    num_b = conv_layer.bias.numel()
-                    conv_b = torch.from_numpy(weights[ptr : ptr + num_b]).view_as(conv_layer.bias)
-                    conv_layer.bias.data.copy_(conv_b)
-                    ptr += num_b
-                # Load conv. weights
-                num_w = conv_layer.weight.numel()
-                conv_w = torch.from_numpy(weights[ptr : ptr + num_w]).view_as(conv_layer.weight)
-                conv_layer.weight.data.copy_(conv_w)
-                ptr += num_w
-
-    def save_darknet_weights(self, path, cutoff=-1):
-        """
-            @:param path    - path of the new weights file
-            @:param cutoff  - save layers between 0 and cutoff (cutoff = -1 -> all are saved)
-        """
-        fp = open(path, "wb")
-        self.header_info[3] = self.seen
-        self.header_info.tofile(fp)
-
-        # Iterate through layers
-        for i, (module_def, module) in enumerate(zip(self.module_defs[:cutoff], self.module_list[:cutoff])):
-            if module_def["type"] == "convolutional":
-                conv_layer = module[0]
-                # If batch norm, load bn first
-                if module_def["batch_normalize"]:
-                    bn_layer = module[1]
-                    bn_layer.bias.data.cpu().numpy().tofile(fp)
-                    bn_layer.weight.data.cpu().numpy().tofile(fp)
-                    bn_layer.running_mean.data.cpu().numpy().tofile(fp)
-                    bn_layer.running_var.data.cpu().numpy().tofile(fp)
-                # Load conv bias
-                else:
-                    conv_layer.bias.data.cpu().numpy().tofile(fp)
-                # Load conv weights
-                conv_layer.weight.data.cpu().numpy().tofile(fp)
-
-        fp.close()
+        # calc loss in 3 scales
+        for i in range(len(y_pred)):
+            result = self.loss_layer(y_pred[i], y_true[i], anchor_group[i])
+            loss_xy += result[0]
+            loss_wh += result[1]
+            loss_conf += result[2]
+            loss_class += result[3]
+        total_loss = loss_xy + loss_wh + loss_conf + loss_class
+        return [total_loss, loss_xy, loss_wh, loss_conf, loss_class]
