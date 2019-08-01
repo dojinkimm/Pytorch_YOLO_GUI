@@ -20,6 +20,10 @@ class DetectBoxes:
         self.nmsThreshold = nms_threshold
         self.device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+    def update_threshold(self, confidence, nms):
+        self.confThreshold = confidence
+        self.nmsThreshold = nms
+
     def bounding_box_yolo(self, frame, inp_dim, model):
         img, orig_im, dim = prep_image(frame, inp_dim)
         im_dim = torch.FloatTensor(dim).repeat(1, 2).to("cuda")
@@ -53,34 +57,34 @@ class DetectBoxes:
 
                 self.draw_boxes(frame, self.classes[cls+1], outs[5], left, top, right, bottom, color)
 
-    # detect bounding boxes rcnn
-    def bounding_box_rcnn(self, frame, model):
-        # Image is converted to image Tensor
-        transform = transforms.Compose([transforms.ToTensor()])
-        img = transform(frame).to(self.device)
-        with torch.no_grad():
-            # The image is passed through model to get predictions
-            pred = model([img])
-
-        # classes, bounding boxes, confidence scores are gained
-        # only classes and bounding boxes > confThershold are passed to draw_boxes
-        pred_class = [self.classes[i] for i in list(pred[0]['labels'].cpu().clone().numpy())]
-        pred_boxes = [[(i[0], i[1]), (i[2], i[3])] for i in list(pred[0]['boxes'].detach().cpu().clone().numpy())]
-        pred_score = list(pred[0]['scores'].detach().cpu().clone().numpy())
-        pred_t = [pred_score.index(x) for x in pred_score if x > self.confThreshold][-1]
-        pred_colors = [i for i in list(pred[0]['labels'].cpu().clone().numpy())]
-        pred_boxes = pred_boxes[:pred_t + 1]
-        pred_class = pred_class[:pred_t + 1]
-
-        for i in range(len(pred_boxes)):
-            left = int(pred_boxes[i][0][0])
-            top = int(pred_boxes[i][0][1])
-            right = int(pred_boxes[i][1][0])
-            bottom = int(pred_boxes[i][1][1])
-
-            color = STANDARD_COLORS[pred_colors[i] % len(STANDARD_COLORS)]
-
-            self.draw_boxes(frame, pred_class[i], pred_score[i], left, top, right, bottom, color)
+    # # detect bounding boxes rcnn
+    # def bounding_box_rcnn(self, frame, model):
+    #     # Image is converted to image Tensor
+    #     transform = transforms.Compose([transforms.ToTensor()])
+    #     img = transform(frame).to(self.device)
+    #     with torch.no_grad():
+    #         # The image is passed through model to get predictions
+    #         pred = model([img])
+    #
+    #     # classes, bounding boxes, confidence scores are gained
+    #     # only classes and bounding boxes > confThershold are passed to draw_boxes
+    #     pred_class = [self.classes[i] for i in list(pred[0]['labels'].cpu().clone().numpy())]
+    #     pred_boxes = [[(i[0], i[1]), (i[2], i[3])] for i in list(pred[0]['boxes'].detach().cpu().clone().numpy())]
+    #     pred_score = list(pred[0]['scores'].detach().cpu().clone().numpy())
+    #     pred_t = [pred_score.index(x) for x in pred_score if x > self.confThreshold][-1]
+    #     pred_colors = [i for i in list(pred[0]['labels'].cpu().clone().numpy())]
+    #     pred_boxes = pred_boxes[:pred_t + 1]
+    #     pred_class = pred_class[:pred_t + 1]
+    #
+    #     for i in range(len(pred_boxes)):
+    #         left = int(pred_boxes[i][0][0])
+    #         top = int(pred_boxes[i][0][1])
+    #         right = int(pred_boxes[i][1][0])
+    #         bottom = int(pred_boxes[i][1][1])
+    #
+    #         color = STANDARD_COLORS[pred_colors[i] % len(STANDARD_COLORS)]
+    #
+    #         self.draw_boxes(frame, pred_class[i], pred_score[i], left, top, right, bottom, color)
 
     def draw_boxes(self, frame, class_id, score, left, top, right, bottom, color):
         txt_color = (0, 0, 0)

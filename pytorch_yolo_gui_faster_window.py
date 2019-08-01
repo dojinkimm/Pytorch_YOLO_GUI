@@ -69,6 +69,9 @@ def main():
     # load detection class, default confidence threshold is 0.5
     detect = DetectBoxes(args['label_path'], conf_threshold=args['confidence'], nms_threshold=args['nms_threshold'])
 
+    # Set window
+    winName = 'YOLO-Pytorch'
+
     try:
         # Read Video file
         cap = cv2.VideoCapture(VIDEO_PATH)
@@ -86,28 +89,24 @@ def main():
         start = time.time()
         detect.bounding_box_yolo(frame, inp_dim, model)
 
-        imgbytes = cv2.imencode('.png', frame)[1].tobytes()  # ditto
+        cv2.imshow(winName, frame)
 
         if not win_started:
             win_started = True
             layout = [
-                [sg.Text('Pytorch YOLO Video', size=(30, 1))],
-                [sg.Image(data=imgbytes, key='_IMAGE_')],
+                [sg.Text('YOLO confidence, nms-threshold update window', size=(30, 1))],
                 [sg.Text('Confidence'),
-                 sg.Slider(range=(0, 1), orientation='h', resolution=.1, default_value=.5, size=(15, 15),
-                           key='confidence'),
+                 sg.Slider(range=(0, 1), orientation='h', resolution=.1,
+                           default_value=args['confidence'], size=(15, 15), key='confidence'),
                  sg.Text('NMSThreshold'),
-                 sg.Slider(range=(0, 1), orientation='h', resolution=.1, default_value=.4, size=(15, 15),
-                           key='nms')],
+                 sg.Slider(range=(0, 1), orientation='h', resolution=.1,
+                           default_value=args['nms_threshold'], size=(15, 15), key='nms')],
                 [sg.Exit()]
             ]
             win = sg.Window('YOLO Output',
                             default_element_size=(14, 1),
                             text_justification='right',
                             auto_size_text=False).Layout(layout).Finalize()
-            image_elem = win.FindElement('_IMAGE_')
-        else:
-            image_elem.Update(data=imgbytes)
 
         event, values = win.Read(timeout=0)
         if event is None or event == 'Exit':

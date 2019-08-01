@@ -15,7 +15,7 @@ def arg_parse():
     weight_path = r'weight/yolov3.weights'
     cfg_path = r'config/yolov3.cfg'
     layout = [
-        [sg.Text('Tensorflow-YOLO Video Player', size=(18, 1), font=('Any', 18), text_color='#1c86ee', justification='left')],
+        [sg.Text('Tensorflow-YOLO Video Player', size=(25, 1), font=('Any', 18), text_color='#1c86ee', justification='left')],
         [sg.Text('Path to input video'), sg.In(i_vid, size=(40, 1), key='video'), sg.FileBrowse()],
         [sg.Text('Path to cfg File'), sg.In(cfg_path, size=(40, 1), key='cfg_path'), sg.FileBrowse()],
         [sg.Text('Path to weight File'), sg.In(weight_path, size=(40, 1), key='weight_path'), sg.FileBrowse()],
@@ -27,7 +27,7 @@ def arg_parse():
         [sg.Text('Resolution'), sg.Radio('320', "resolution", key="small_resol"),
          sg.Radio('416', "resolution", default=True, key="best_resol"),
          sg.Radio('512', "resolution", key="large_resol")],
-        [sg.Text("Classes not to detect"), sg.Listbox(values=class_names, default_values=class_names,
+        [sg.Text("Classes to detect"), sg.Listbox(values=class_names, default_values=class_names,
                                                       select_mode=sg.LISTBOX_SELECT_MODE_MULTIPLE, size=(30, 10),
                                                       key='class_list')],
         [sg.Text(' ' * 8), sg.Checkbox('Use webcam', key='webcam')],
