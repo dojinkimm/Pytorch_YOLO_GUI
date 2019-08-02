@@ -65,9 +65,14 @@ python pytorch_yolo_gui.py
 python pytorch_yolo_gui_window.py
 ```
 
+
+
 <div align="center>
     <img src="readme/yolo_window.png" width="600px"/>
 </div>
+
+
+
 
 #### pytorch_yolo_gui_faster_window.py
 ```Shell
