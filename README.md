@@ -57,7 +57,7 @@ python pytorch_yolo_gui.py
 ```
 Video Result
 <div align="center>
-    <img src="readme/yolo_no_window.png" width="600px"/>
+   <img src="readme/yolo_player.png" width="600px"/>
 </div>
 
 #### pytorch_yolo_gui_window.py
