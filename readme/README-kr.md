@@ -53,6 +53,7 @@ Ex) person을 클릭하면 비디오에서 person은 detect되지 않습니다<b
 ```Shell
 python pytorch_yolo_gui.py
 ```
+
 <div align="center>
     <img src="readme/yolo_no_window.png" width="600px"/>
 </div>
@@ -61,6 +62,7 @@ python pytorch_yolo_gui.py
 ```Shell
 python pytorch_yolo_gui_window.py
 ```
+
 <div align="center>
     <img src="readme/yolo_window.png" width="600px"/>
 </div>
@@ -69,9 +71,11 @@ python pytorch_yolo_gui_window.py
 ```Shell
 python pytorch_yolo_gui_window.py
 ```
+
 <div align="center>
     <img src="readme/yolo_faster_window.png" width="600px"/>
 </div>
+
 
 
 

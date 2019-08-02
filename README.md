@@ -55,6 +55,7 @@ Ex) if you click person, the video would not detect persons in the video<br/>
 ```Shell
 python pytorch_yolo_gui.py
 ```
+
 <div align="center>
     <img src="readme/yolo_no_window.png" width="600px"/>
 </div>
@@ -63,6 +64,7 @@ python pytorch_yolo_gui.py
 ```Shell
 python pytorch_yolo_gui_window.py
 ```
+
 <div align="center>
     <img src="readme/yolo_window.png" width="600px"/>
 </div>
@@ -71,6 +73,7 @@ python pytorch_yolo_gui_window.py
 ```Shell
 python pytorch_yolo_gui_window.py
 ```
+
 <div align="center>
     <img src="readme/yolo_faster_window.png" width="600px"/>
 </div>
