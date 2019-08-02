@@ -50,32 +50,32 @@ Ex) person을 클릭하면 비디오에서 person은 detect되지 않습니다<b
 * Use webcam - 체크되면, 웹캠이 켜질 것입니다<br/>
 
 #### pytorch_yolo_gui.py
+<div align="center>
+    <img src="yolo_no_window.png" width="600px"/>
+</div>
+
 ```Shell
 python pytorch_yolo_gui.py
 ```
 
-<div align="center>
-    <img src="readme/yolo_no_window.png" width="600px"/>
-</div>
 
 #### pytorch_yolo_gui_window.py
+<div align="center>
+    <img src="yolo_window.png" width="600px"/>
+</div>
+
 ```Shell
 python pytorch_yolo_gui_window.py
 ```
-
-<div align="center>
-    <img src="readme/yolo_window.png" width="600px"/>
-</div>
 
 #### pytorch_yolo_gui_faster_window.py
+<div align="center>
+    <img src="yolo_faster_window.png" width="600px"/>
+</div>
+
 ```Shell
 python pytorch_yolo_gui_window.py
 ```
-
-<div align="center>
-    <img src="readme/yolo_faster_window.png" width="600px"/>
-</div>
-
 
 
 

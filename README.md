@@ -52,32 +52,32 @@ Ex) if you click person, the video would not detect persons in the video<br/>
 * Use webcam - if checked, webcam will be turned on<br/>
 
 #### pytorch_yolo_gui.py
+<div align="center>
+    <img src="readme/yolo_no_window.png" width="600px"/>
+</div>
+
 ```Shell
 python pytorch_yolo_gui.py
 ```
-<br/>
-Video Result
-<div align="center>
-   <img src="readme/yolo_player.png" width="600px"/>
-</div>
 
 #### pytorch_yolo_gui_window.py
-```Shell
-python pytorch_yolo_gui_window.py
-```
-Video Result
 <div align="center>
-    <img src="readme/yolo_window.png"/>
+    <img src="readme/yolo_window.png" width="600px"/>
 </div>
 
-#### pytorch_yolo_gui_faster_window.py
 ```Shell
 python pytorch_yolo_gui_window.py
 ```
-Video Result
+
+#### pytorch_yolo_gui_faster_window.py
 <div align="center>
     <img src="readme/yolo_faster_window.png" width="600px"/>
 </div>
+
+```Shell
+python pytorch_yolo_gui_window.py
+```
+
 
 ### Credits:
 Video by Pixabay from Pexels<br/>
