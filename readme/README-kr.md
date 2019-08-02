@@ -33,9 +33,9 @@ wget https://pjreddie.com/media/files/yolov3.weights
 3개의 Python 파일이 있는데 각각 비디오를 실행시키는 포맷이 다릅니다.
 하지만 처음에 나오는 GUI는 다 같습니다. `pytorch_yolo_gui_window.py` 와 `pytorch_yolo_gui_faster_window.py`에서는
 confidence nmsthreshold 값을 실시간으로 변경할 수 있습니다. 
-<div align="center">
-    <img src="readme/yolo_player.png" width="600px"/>
-</div>
+
+![Screenshot](yolo_player.png)
+
 각 파트를 설명하자면: 
 
 * Path to input video - 비디오 파일이 있는 경로
@@ -50,33 +50,16 @@ Ex) person을 클릭하면 비디오에서 person은 detect되지 않습니다<b
 * Use webcam - 체크되면, 웹캠이 켜질 것입니다<br/>
 
 #### pytorch_yolo_gui.py
-<div align="center>
-    <img src="yolo_no_window.png" width="600px"/>
-</div>
 
-```Shell
-python pytorch_yolo_gui.py
-```
-
+![Screenshot](yolo_no_window.png)
 
 #### pytorch_yolo_gui_window.py
-<div align="center>
-    <img src="yolo_window.png" width="600px"/>
-</div>
 
-```Shell
-python pytorch_yolo_gui_window.py
-```
+![Screenshot](yolo_window.png)
 
 #### pytorch_yolo_gui_faster_window.py
-<div align="center>
-    <img src="yolo_faster_window.png" width="600px"/>
-</div>
 
-```Shell
-python pytorch_yolo_gui_window.py
-```
-
+![Screenshot](yolo_faster_window.png)
 
 
 

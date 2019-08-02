@@ -35,9 +35,9 @@ After the command yolov3.weights file will be downloaded in weight directory.
 ## Running Demos
 There are total 3 python files with different formats displaying the video. But,the GUI that is shown at the beginning is same for all.
 In `pytorch_yolo_gui_window.py` and `pytorch_yolo_gui_faster_window.py` you can modify value of confidence and nmsthreshold in real time.
-<div align="center">
-    <img src="readme/yolo_player.png" width="600px"/>
-</div>
+
+![Screenshot](readme/yolo_player.png)
+
 To explain each parts:
 
 * Path to input video - video file you want to display
@@ -53,23 +53,15 @@ Ex) if you click person, the video would not detect persons in the video<br/>
 
 #### pytorch_yolo_gui.py
 
-<div align="center>
-    <img src="readme/yolo_no_window.png" width="600px"/>
-</div>
-
+![Screenshot](readme/yolo_no_window.png)
 
 #### pytorch_yolo_gui_window.py
 
-<div align="center>
-    <img src="readme/yolo_window.png" width="600px"/>
-</div>
-
+![Screenshot](readme/yolo_window.png)
 
 #### pytorch_yolo_gui_faster_window.py
 
-<div align="center>
-    <img src="readme/yolo_faster_window.png" width="600px"/>
-</div>
+![Screenshot](readme/yolo_faster_window.png)
 
 
 
