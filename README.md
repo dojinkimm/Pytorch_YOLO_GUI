@@ -55,6 +55,7 @@ Ex) if you click person, the video would not detect persons in the video<br/>
 ```Shell
 python pytorch_yolo_gui.py
 ```
+<br/>
 Video Result
 <div align="center>
    <img src="readme/yolo_player.png" width="600px"/>
