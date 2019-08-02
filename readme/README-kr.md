@@ -34,7 +34,9 @@ wget https://pjreddie.com/media/files/yolov3.weights
 하지만 처음에 나오는 GUI는 다 같습니다. `pytorch_yolo_gui_window.py` 와 `pytorch_yolo_gui_faster_window.py`에서는
 confidence nmsthreshold 값을 실시간으로 변경할 수 있습니다. 
 
-![Screenshot](yolo_player.png)
+<div align="center">
+    <img src="yolo_player.png" width="600px"/>
+</div>
 
 각 파트를 설명하자면: 
 
